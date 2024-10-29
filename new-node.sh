@@ -34,13 +34,14 @@ sleep 30
 # Fetch private IP of the VM
 PRIVATE_IP=$(aws ec2 describe-instances --region "$REGION" --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
 
+ssh-keyscan -H $PRIVATE_IP >> /root/.ssh/known_hosts
+
 # Transfer the packages to the new node
 sudo scp -i "$SSH_KEY_PATH" "$LIBSSL_PACKAGE_PATH" "$COMMON_PACKAGE_PATH" "$CLIENT_PACKAGE_PATH" "$EXEC_PACKAGE_PATH" ubuntu@"$PRIVATE_IP":"$REMOTE_FILE_PATH/"
 sudo scp -i "$SSH_KEY_PATH" "$KEYTAB_FILE_PATH" ubuntu@"$PRIVATE_IP":"/tmp/"
 
-
 # Set Hostname
-ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no ubuntu@"$PRIVATE_IP" << EOF
+ssh -i "$SSH_KEY_PATH" ubuntu@"$PRIVATE_IP" << EOF
   sudo apt update -y
   sudo hostnamectl set-hostname "$HOSTNAME"
   sudo mv /tmp/config.keytab "$KEYTAB_FILE_PATH"
@@ -49,10 +50,10 @@ EOF
 sleep 5
 
 # The rest of the setup
-ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no ubuntu@"$PRIVATE_IP" << EOF
+ssh -i "$SSH_KEY_PATH" ubuntu@"$PRIVATE_IP" << EOF
   VM_IP=\$(hostname -I | awk '{print \$1}')
   echo "\$VM_IP $HOSTNAME \${HOSTNAME%%.*}" | sudo tee -a /etc/hosts
-  echo "10.0.12.1 $MASTER_NODE_NAME.$DOMAIN" | sudo tee -a /etc/hosts > /dev/null
+  echo "$MASTER_NODE_IP $MASTER_NODE_NAME.$DOMAIN" | sudo tee -a /etc/hosts > /dev/null
 
   # Stop local name resolution
   sudo systemctl stop systemd-resolved
@@ -72,17 +73,22 @@ ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no ubuntu@"$PRIVATE_IP" << EOF
   # Join the domain
   sudo kinit -kt /etc/config.keytab "$MSAD_SP_NAME"@"$KERBROS_DOMAIN"
   sudo realm join "$DOMAIN"
+
+  # destroy from memory and delete keytab file
+  sudo kdestroy
+  sudo rm -f /etc/config.keytab
 EOF
 
+
 # Add new node into Master node
-ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no ubuntu@"$MASTER_NODE_IP" << EOF
+ssh -i "$SSH_KEY_PATH" ubuntu@"$MASTER_NODE_IP" << EOF
   sudo qconf -ah "$HOSTNAME"
   sudo qconf -as "$HOSTNAME"
 EOF
 
 
 # Install GE packages 
-ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no ubuntu@"$PRIVATE_IP" << EOF
+ssh -i "$SSH_KEY_PATH" ubuntu@"$PRIVATE_IP" << EOF
   sudo apt install -y debconf-utils
   sudo apt-get install -y libmunge2 libhwloc5
   echo "bsd-mailx mail/alias string" | sudo debconf-set-selections
